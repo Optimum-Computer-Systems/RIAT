@@ -148,7 +148,7 @@ export async function POST(request: NextRequest) {
                         id_number: upperIdNumber,
                         role: userData.role.toLowerCase(),
                         phone_number: userData.phone_number,
-                        department: userData.department || null,
+                        department: userData.department ? userData.department.substring(0, 100) : null,                       
                         gender: userData.gender.toLowerCase(),
                         email: userData.email ? userData.email.toLowerCase() : null,
                         is_active: userData.is_active !== false,
