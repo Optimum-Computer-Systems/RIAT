@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Upload, Download } from "lucide-react";
+import { PlusCircle, Upload, Download, Search } from "lucide-react";
 import UsersTable from '@/components/users/users';
 import * as XLSX from 'xlsx';
 import {
@@ -33,9 +33,20 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { User } from '@/lib/types/user';
 
+interface Department {
+  id: number;
+  name: string;
+  code: string;
+  description: string | null;
+  is_active: boolean;
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
+  const [filteredUsers, setFilteredUsers] = useState<User[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingDepartments, setIsLoadingDepartments] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [error, setError] = useState('');
@@ -53,6 +64,11 @@ export default function UsersPage() {
   const [deactivatingUser, setDeactivatingUser] = useState<User | null>(null);
   const [isDeactivating, setIsDeactivating] = useState(false);
   
+  // Search and pagination states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const usersPerPage = 50;
+  
   // Excel import states
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -60,12 +76,38 @@ export default function UsersPage() {
     imported: number;
     skipped: number;
     errors: string[];
+    duplicates: string[];
   } | null>(null);
+  const [showDuplicatesDialog, setShowDuplicatesDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchUsers();
+    fetchDepartments();
   }, []);
+
+  // Filter users when search query changes
+  useEffect(() => {
+    if (searchQuery.trim() === '') {
+      setFilteredUsers(users);
+    } else {
+      const query = searchQuery.toLowerCase();
+      const filtered = users.filter(user => 
+        user.name.toLowerCase().includes(query) ||
+        user.id_number.toLowerCase().includes(query) ||
+        (user.department && user.department.toLowerCase().includes(query))
+      );
+      setFilteredUsers(filtered);
+    }
+    // Reset to first page when search changes
+    setCurrentPage(1);
+  }, [searchQuery, users]);
+
+  // Calculate pagination
+  const indexOfLastUser = currentPage * usersPerPage;
+  const indexOfFirstUser = indexOfLastUser - usersPerPage;
+  const currentUsers = filteredUsers.slice(indexOfFirstUser, indexOfLastUser);
+  const totalPages = Math.ceil(filteredUsers.length / usersPerPage);
 
   const fetchUsers = async () => {
     try {
@@ -73,10 +115,24 @@ export default function UsersPage() {
       if (!response.ok) throw new Error('Failed to fetch users');
       const data = await response.json();
       setUsers(data);
+      setFilteredUsers(data);
     } catch (error) {
       console.error('Error fetching users:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchDepartments = async () => {
+    try {
+      const response = await fetch('/api/departments');
+      if (!response.ok) throw new Error('Failed to fetch departments');
+      const data = await response.json();
+      setDepartments(data);
+    } catch (error) {
+      console.error('Error fetching departments:', error);
+    } finally {
+      setIsLoadingDepartments(false);
     }
   };
 
@@ -104,7 +160,7 @@ export default function UsersPage() {
       role: user.role,
       phone_number: user.phone_number,
       gender: user.gender,
-      department: user.department,
+      department: user.department || '',
       email: user.email ?? '',
       is_active: user.is_active
     });
@@ -197,7 +253,6 @@ export default function UsersPage() {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
       
-      // Find the sheet with actual data (skip Instructions sheet if present)
       let worksheet;
       const dataSheetIndex = workbook.SheetNames.findIndex(
         name => name.toLowerCase().includes('sample') || name.toLowerCase().includes('data') || name.toLowerCase() === 'users'
@@ -206,18 +261,15 @@ export default function UsersPage() {
       if (dataSheetIndex !== -1) {
         worksheet = workbook.Sheets[workbook.SheetNames[dataSheetIndex]];
       } else {
-        // If no specific sheet found, use the last sheet (assuming first is instructions)
         worksheet = workbook.Sheets[workbook.SheetNames[workbook.SheetNames.length - 1]];
       }
       
       const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
-      console.log('Raw Excel data:', jsonData); // Debug log
+      console.log('Raw Excel data:', jsonData);
 
-      // Filter out empty rows and transform Excel data
       const usersToImport = jsonData
         .filter((row: any) => {
-          // Skip rows where name is empty or undefined
           return row.name || row.Name;
         })
         .map((row: any) => {
@@ -232,20 +284,18 @@ export default function UsersPage() {
             is_active: row.is_active === false || row.is_active === 'false' ? false : true
           };
           
-          // Clean up empty string values to null for optional fields
           if (user.department === '') user.department = null;
           if (user.email === '') user.email = null;
           
           return user;
         });
 
-      console.log('Transformed users:', usersToImport); // Debug log
+      console.log('Transformed users:', usersToImport);
 
       if (usersToImport.length === 0) {
         throw new Error('No valid user data found in the Excel file. Please check the format.');
       }
 
-      // Send to API
       const response = await fetch('/api/users/import', {
         method: 'POST',
         headers: {
@@ -256,36 +306,48 @@ export default function UsersPage() {
 
       const result = await response.json();
 
-      if (!response.ok) {
-        // Show detailed error information
-        const errorMessage = result.error || 'Failed to import users';
-        const details = result.details ? JSON.stringify(result.details, null, 2) : '';
-        throw new Error(`${errorMessage}${details ? '\n\nDetails: ' + details : ''}`);
+      if (!response.ok && response.status === 500) {
+        throw new Error(result.error || 'Server error occurred while importing users');
       }
 
       setImportResults({
-        imported: result.imported,
-        skipped: result.skipped,
-        errors: result.errors || []
+        imported: result.imported || 0,
+        skipped: result.skipped || 0,
+        errors: result.errors || [],
+        duplicates: result.duplicates || []
       });
 
-      // Refresh users list
-      await fetchUsers();
+      if (result.imported > 0) {
+        await fetchUsers();
+      }
+
+      if (result.imported === 0 && (result.errors?.length > 0 || result.duplicates?.length > 0)) {
+        setError('Import completed with issues. Please review the details below.');
+      }
 
     } catch (error) {
-      console.error('Import error:', error); // Debug log
+      console.error('Import error:', error);
       setError(error instanceof Error ? error.message : 'Failed to process file');
     } finally {
       setIsImporting(false);
-      // Reset file input
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
     }
   };
 
+  const handleCloseImportDialog = () => {
+    if (importResults && importResults.duplicates.length > 0) {
+      setIsImportDialogOpen(false);
+      setShowDuplicatesDialog(true);
+    } else {
+      setIsImportDialogOpen(false);
+      setImportResults(null);
+      setError('');
+    }
+  };
+
   const downloadTemplate = () => {
-    // Sample data with multiple examples
     const template = [
       {
         name: 'John Doe',
@@ -293,13 +355,21 @@ export default function UsersPage() {
         role: 'employee',
         phone_number: '+254712345678',
         gender: 'male',
-        department: 'Finance',
+        department: departments.length > 0 ? departments[0].name : 'Finance',
         email: 'john.doe@example.com',
         is_active: true
       }
     ];
 
-    // Instructions sheet
+    // Build department list from fetched departments
+    const departmentInstructions = departments.length > 0 
+      ? departments.map(dept => ({ Instruction: `  - ${dept.name}` }))
+      : [
+          { Instruction: '  - Finance' },
+          { Instruction: '  - Human Resources' },
+          { Instruction: '  - Engineering' }
+        ];
+
     const instructions = [
       { Instruction: 'USERS IMPORT TEMPLATE - INSTRUCTIONS' },
       { Instruction: '' },
@@ -311,32 +381,20 @@ export default function UsersPage() {
       { Instruction: '  - gender: Must be either "male" or "female"' },
       { Instruction: '' },
       { Instruction: 'Optional Fields:' },
-      { Instruction: '  - department: User\'s department' },
+      { Instruction: '  - department: User\'s department (max 20 characters)' },
       { Instruction: '  - email: User\'s email address (must be unique if provided)' },
       { Instruction: '  - is_active: Set to true or false (default is true)' },
       { Instruction: '' },
-      { Instruction: 'Valid Departments:' },
-      { Instruction: '  - Finance' },
-      { Instruction: '  - Human Resources' },
-      { Instruction: '  - Engineering' },
-      { Instruction: '  - Procurement' },
-      { Instruction: '  - Administration' },
-      { Instruction: '  - Executive' },
-      { Instruction: '  - Building and Civil Engineering' },
-      { Instruction: '  - Electrical and Electronics Engineering' },
-      { Instruction: '  - Cosmetology' },
-      { Instruction: '  - Fashion Design and Clothing Textile' },
-      { Instruction: '  - Business and Liberal Studies' },
-      { Instruction: '  - Agriculture and Environment Studies' },
-      { Instruction: '  - Automotive and Mechanical Engineering' },
-      { Instruction: '  - Hospitality and Institutional Management' },
+      { Instruction: 'Valid Departments (will be truncated to 20 characters):' },
+      ...departmentInstructions,
       { Instruction: '' },
       { Instruction: 'Important Notes:' },
       { Instruction: '  - ID numbers must be unique across all users' },
       { Instruction: '  - Email addresses must be unique if provided' },
+      { Instruction: '  - Duplicates will be automatically skipped' },
+      { Instruction: '  - Department names longer than 20 characters will be truncated' },
       { Instruction: '  - Delete the sample data rows before importing your actual data' },
       { Instruction: '  - Keep the column headers exactly as shown' },
-      { Instruction: '  - The system will skip duplicate entries and show errors' },
       { Instruction: '' },
       { Instruction: 'After filling the template:' },
       { Instruction: '  1. Save the file' },
@@ -347,26 +405,73 @@ export default function UsersPage() {
 
     const workbook = XLSX.utils.book_new();
     
-    // Add instructions sheet
     const instructionsWS = XLSX.utils.json_to_sheet(instructions);
     instructionsWS['!cols'] = [{ wch: 80 }];
     XLSX.utils.book_append_sheet(workbook, instructionsWS, 'Instructions');
     
-    // Add sample data sheet
     const dataWS = XLSX.utils.json_to_sheet(template);
     dataWS['!cols'] = [
-      { wch: 20 }, // name
-      { wch: 15 }, // id_number
-      { wch: 12 }, // role
-      { wch: 18 }, // phone_number
-      { wch: 10 }, // gender
-      { wch: 40 }, // department
-      { wch: 30 }, // email
-      { wch: 10 }  // is_active
+      { wch: 20 },
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 10 },
+      { wch: 20 },
+      { wch: 30 },
+      { wch: 10 }
     ];
     XLSX.utils.book_append_sheet(workbook, dataWS, 'Sample Data');
 
     XLSX.writeFile(workbook, 'users_import_template.xlsx');
+  };
+
+  // Pagination handlers
+  const goToNextPage = () => {
+    setCurrentPage(prev => Math.min(prev + 1, totalPages));
+  };
+
+  const goToPreviousPage = () => {
+    setCurrentPage(prev => Math.max(prev - 1, 1));
+  };
+
+  const goToPage = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  // Generate page numbers for pagination
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxPagesToShow = 5;
+    
+    if (totalPages <= maxPagesToShow) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1);
+        pages.push('...');
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        pages.push(1);
+        pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
   };
 
   if (isLoading) {
@@ -428,6 +533,7 @@ export default function UsersPage() {
                   <Label htmlFor="email">E-Mail</Label>
                   <Input
                     id="email"
+                    type="email"
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     required
@@ -461,31 +567,26 @@ export default function UsersPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="department">Department</Label>
+                  <Label htmlFor="department">Department (max 20 characters)</Label>
                   <Select
                     value={formData.department}
                     onValueChange={(value) => setFormData({ ...formData, department: value })}
+                    disabled={isLoadingDepartments}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select department" />
+                      <SelectValue placeholder={isLoadingDepartments ? "Loading departments..." : "Select department"} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="finance">Finance</SelectItem>
-                      <SelectItem value="Human Resources">Human Resources</SelectItem>
-                      <SelectItem value="Engineering">Engineering</SelectItem>
-                      <SelectItem value="Procurement">Procurement</SelectItem>
-                      <SelectItem value="Administration">Administration</SelectItem>
-                      <SelectItem value="Executive">Executive</SelectItem>
-                      <SelectItem value="Building and Civil Engineering">Building and Civil Engineering</SelectItem>
-                      <SelectItem value="Electrical and Electronics Engineering">Electrical and Electronics Engineering</SelectItem>
-                      <SelectItem value="Cosmetology">Cosmetology</SelectItem>
-                      <SelectItem value="Fashion Design and Clothing Textile">Fashion Design and Clothing Textile</SelectItem>
-                      <SelectItem value="Business and Liberal Studies">Business and Liberal Studies</SelectItem>
-                      <SelectItem value="Agriculture and Environment Studies">Agriculture and Environment Studies</SelectItem>
-                      <SelectItem value="Automotive and Mechanical Engineering">Automotive and Mechanical Engineering</SelectItem>
-                      <SelectItem value="Hospitality and Institutional Management">Hospitality and Institutional Management</SelectItem>
+                      {departments.map((dept) => (
+                        <SelectItem key={dept.id} value={dept.name}>
+                          {dept.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
+                  {isLoadingDepartments && (
+                    <p className="text-sm text-gray-500">Loading departments...</p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -543,9 +644,27 @@ export default function UsersPage() {
         </div>
       </div>
 
+      {/* Search Bar */}
+      <div className="mb-6">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+          <Input
+            type="text"
+            placeholder="Search by name, ID number, or department..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 max-w-md"
+          />
+        </div>
+        <p className="text-sm text-gray-500 mt-2">
+          Showing {indexOfFirstUser + 1}-{Math.min(indexOfLastUser, filteredUsers.length)} of {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
+          {searchQuery && ` (filtered from ${users.length} total)`}
+        </p>
+      </div>
+
       {/* Excel Import Dialog */}
       <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Import Users from Excel</DialogTitle>
           </DialogHeader>
@@ -558,22 +677,36 @@ export default function UsersPage() {
             )}
 
             {importResults && (
-              <Alert>
+              <Alert className={importResults.imported > 0 ? 'border-green-500' : 'border-yellow-500'}>
                 <AlertDescription>
                   <div className="space-y-2">
                     <p className="font-semibold">Import Results:</p>
-                    <p>✅ Successfully imported: {importResults.imported} users</p>
+                    <p className="text-green-600">✅ Successfully imported: {importResults.imported} user(s)</p>
                     {importResults.skipped > 0 && (
-                      <p>⚠️ Skipped: {importResults.skipped} users</p>
+                      <p className="text-yellow-600">⚠️ Skipped: {importResults.skipped} user(s)</p>
                     )}
+                    
                     {importResults.errors.length > 0 && (
                       <div className="mt-2">
-                        <p className="font-semibold text-red-600">Errors:</p>
-                        <ul className="list-disc list-inside text-sm max-h-40 overflow-y-auto">
-                          {importResults.errors.map((error, index) => (
-                            <li key={index}>{error}</li>
-                          ))}
-                        </ul>
+                        <p className="font-semibold text-red-600">Validation Errors:</p>
+                        <div className="max-h-40 overflow-y-auto bg-gray-50 p-2 rounded mt-1">
+                          <ul className="list-disc list-inside text-sm space-y-1">
+                            {importResults.errors.map((error, index) => (
+                              <li key={index} className="text-red-700">{error}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+
+                    {importResults.duplicates.length > 0 && (
+                      <div className="mt-2">
+                        <p className="font-semibold text-orange-600">
+                          Duplicates Found ({importResults.duplicates.length}):
+                        </p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Click &quot;Close&quot; to see detailed duplicate information
+                        </p>
                       </div>
                     )}
                   </div>
@@ -593,8 +726,7 @@ export default function UsersPage() {
                 Download Excel Template
               </Button>
               <p className="text-sm text-muted-foreground">
-                Download the template file and fill in your user data. Required fields: 
-                name, id_number, role, phone_number, gender
+                Download the template file and fill in your user data. Department names will be automatically truncated to 20 characters.
               </p>
             </div>
 
@@ -609,7 +741,7 @@ export default function UsersPage() {
                 ref={fileInputRef}
               />
               <p className="text-sm text-muted-foreground">
-                Upload your completed Excel file. The system will validate and import the users.
+                Upload your completed Excel file. Duplicates will be automatically skipped.
               </p>
             </div>
 
@@ -624,11 +756,7 @@ export default function UsersPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => {
-                  setIsImportDialogOpen(false);
-                  setImportResults(null);
-                  setError('');
-                }}
+                onClick={handleCloseImportDialog}
               >
                 Close
               </Button>
@@ -636,6 +764,38 @@ export default function UsersPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Duplicates Dialog */}
+      <AlertDialog open={showDuplicatesDialog} onOpenChange={setShowDuplicatesDialog}>
+        <AlertDialogContent className="max-w-3xl max-h-[80vh]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Duplicate Users Found</AlertDialogTitle>
+            <AlertDialogDescription>
+              The following entries were skipped because they already exist in the system:
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          
+          <div className="max-h-96 overflow-y-auto bg-gray-50 p-4 rounded">
+            <ul className="space-y-2">
+              {importResults?.duplicates.map((duplicate, index) => (
+                <li key={index} className="text-sm border-b pb-2 last:border-b-0">
+                  <span className="text-orange-600 font-medium">⚠️</span> {duplicate}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => {
+              setShowDuplicatesDialog(false);
+              setImportResults(null);
+              setError('');
+            }}>
+              Close
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={!!deactivatingUser}
@@ -662,7 +822,63 @@ export default function UsersPage() {
         </AlertDialogContent>
       </AlertDialog>
       
-      <UsersTable users={users} onEdit={handleEdit} />
+      {/* Users Table */}
+      <UsersTable users={currentUsers} onEdit={handleEdit} />
+
+      {/* Pagination */}
+      {filteredUsers.length > 0 && (
+        <div className="mt-6 flex items-center justify-between">
+          <div className="text-sm text-gray-500">
+            Page {currentPage} of {totalPages}
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={goToPreviousPage}
+              disabled={currentPage === 1}
+            >
+              Previous
+            </Button>
+            
+            <div className="flex gap-1">
+              {getPageNumbers().map((page, index) => (
+                page === '...' ? (
+                  <span key={`ellipsis-${index}`} className="px-3 py-1">...</span>
+                ) : (
+                  <Button
+                    key={page}
+                    variant={currentPage === page ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => goToPage(page as number)}
+                    className="min-w-[40px]"
+                  >
+                    {page}
+                  </Button>
+                )
+              ))}
+            </div>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={goToNextPage}
+              disabled={currentPage === totalPages}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {filteredUsers.length === 0 && (
+        <div className="text-center py-10">
+          <p className="text-gray-500">
+            {searchQuery ? 'No users found matching your search.' : 'No users available.'}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
