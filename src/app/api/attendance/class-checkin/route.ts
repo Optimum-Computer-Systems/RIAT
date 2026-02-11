@@ -30,9 +30,9 @@ const mobileClassAttendanceSchema = z.object({
 
 // Geofence configuration
 const GEOFENCE = {
-  latitude: -1.2249434,
-  longitude: 36.7095401,
-  radius: 600_000, // meters
+ latitude: -0.055163,
+  longitude: 34.756414,
+  radius: 300,
 };
 
 // Simplified authentication

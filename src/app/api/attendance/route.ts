@@ -46,16 +46,16 @@ interface AttendanceSession {
 }
 // Had to push back time by 3 hours because of the time difference in the hosted server
 const TIME_CONSTRAINTS = {
-  CHECK_IN_START: 4,  // 7 AM
+  CHECK_IN_START: 5,  // 7 AM
   WORK_START: 6,      // 9 AM
   WORK_END: 24        // 5 PM
 };
 
 // Geofence configuration for mobile
 const GEOFENCE = {
-  latitude: -0.0236,
-  longitude: 37.9062,
-  radius: 2_000_000,
+  latitude: -0.055163,
+  longitude: 34.756414,
+  radius: 300,
 };
 
 // Mobile request validation schema
