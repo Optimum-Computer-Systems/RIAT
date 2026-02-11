@@ -1,0 +1,481 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+  }
+
+model attendance {
+  id             Int       @id @default(autoincrement())
+  employee_id    Int
+  date           DateTime  @db.Date
+  check_in_time  DateTime?
+  check_out_time DateTime?
+  sessions       Json?
+  status         String    @default("Absent") @db.VarChar(10)
+  users          users     @relation(fields: [employee_id], references: [id], map: "Attendance_employee_id_fkey")
+
+  @@unique([employee_id, date], map: "Attendance_employee_id_date_key")
+  @@index([date], map: "Attendance_date_idx")
+  @@index([employee_id], map: "Attendance_employee_id_idx")
+}
+
+model attendanceprocessinglog {
+  id                Int      @id @default(autoincrement())
+  date              DateTime @unique(map: "AttendanceProcessingLog_date_key")
+  records_processed Int
+  status            String
+  created_at        DateTime @default(now())
+  updated_at        DateTime @default(now())
+}
+
+model biometricenrollments {
+  id             Int      @id @default(autoincrement())
+  user_id        Int
+  biometric_hash String   @db.Text
+  enrolled_at    DateTime @default(now())
+  device_info    Json?
+  ip_address     String?  @db.VarChar(45)
+  user_agent     String?  @db.Text
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @default(now())
+  users          users    @relation(fields: [user_id], references: [id], onDelete: Cascade, map: "BiometricEnrollments_user_id_fkey")
+
+  @@index([user_id], map: "BiometricEnrollments_user_id_idx")
+  @@index([user_id, is_active], map: "BiometricEnrollments_user_id_is_active_idx")
+}
+
+model biometriclogs {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  action     String   @db.VarChar(50)
+  status     String   @db.VarChar(20)
+  ip_address String?  @db.VarChar(45)
+  user_agent String?  @db.Text
+  timestamp  DateTime @default(now())
+  details    Json?
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, map: "BiometricLogs_user_id_fkey")
+
+  @@index([action], map: "BiometricLogs_action_idx")
+  @@index([status], map: "BiometricLogs_status_idx")
+  @@index([timestamp], map: "BiometricLogs_timestamp_idx")
+  @@index([user_id], map: "BiometricLogs_user_id_idx")
+}
+
+model classattendance {
+  id                  Int              @id @default(autoincrement())
+  trainer_id          Int
+  class_id            Int
+  date                DateTime         @db.Date
+  check_in_time       DateTime?
+  check_out_time      DateTime?
+  status              String           @default("Present") @db.VarChar(20)
+  auto_checkout       Boolean          @default(false)
+  work_attendance_id  Int?
+  timetable_slot_id   String?          // ✅ NEW: Link to timetable slot
+  is_online_attendance  Boolean          @default(false) 
+  location_verified   Boolean          @default(false) // ✅ NEW: Was location check passed?
+  check_in_latitude   Decimal?         @db.Decimal(10, 8) // ✅ NEW: Check-in GPS coordinates
+  check_in_longitude  Decimal?         @db.Decimal(11, 8) // ✅ NEW: Check-in GPS coordinates
+  check_out_latitude  Decimal?         @db.Decimal(10, 8) // ✅ NEW: Check-out GPS coordinates
+  check_out_longitude Decimal?         @db.Decimal(11, 8) // ✅ NEW: Check-out GPS coordinates
+  notes               String?          @db.Text // ✅ NEW: Optional notes from trainer
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @default(now()) @updatedAt // ✅ NEW: Track updates
+  classes             classes          @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "ClassAttendance_class_id_fkey")
+  users               users            @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "ClassAttendance_trainer_id_fkey")
+  timetableslots      timetableslots?  @relation(fields: [timetable_slot_id], references: [id], onDelete: SetNull, map: "ClassAttendance_timetable_slot_id_fkey") // ✅ NEW: Relation to timetable
+
+  @@unique([trainer_id, class_id, date, timetable_slot_id], map: "ClassAttendance_unique_attendance") // ✅ UPDATED: More specific uniqueness
+  @@index([auto_checkout], map: "ClassAttendance_auto_checkout_idx")
+  @@index([check_in_time], map: "ClassAttendance_check_in_time_idx")
+  @@index([class_id], map: "ClassAttendance_class_id_idx")
+  @@index([date], map: "ClassAttendance_date_idx")
+  @@index([trainer_id], map: "ClassAttendance_trainer_id_idx")
+  @@index([timetable_slot_id], map: "ClassAttendance_timetable_slot_id_idx") // ✅ NEW: Index for timetable lookup
+  @@index([location_verified], map: "ClassAttendance_location_verified_idx") // ✅ NEW: Index for location queries
+  @@index([is_online_attendance], map: "ClassAttendance_is_online_attendance_idx")
+}
+
+model classes {
+  id                      Int                       @id @default(autoincrement())
+  name                    String                    @db.VarChar(100)
+  code                    String                    @unique(map: "Classes_code_key") @db.VarChar(20)
+  description             String?                   @db.Text
+  department              String                    @db.VarChar(50)
+  duration_hours          Int                       @default(2)
+  is_active               Boolean                   @default(true)
+  created_at              DateTime                  @default(now())
+  updated_at              DateTime                  @default(now())
+  created_by              String                    @db.VarChar(100)
+  classattendance         classattendance[]
+  classsubjects           classsubjects[]
+  termclasses             termclasses[]
+  timetableslots          timetableslots[]
+  trainerclassassignments trainerclassassignments[]
+  subjectassignmentlog    subjectassignmentlog[]    // ADD THIS
+
+  @@index([code], map: "Classes_code_idx")
+  @@index([department], map: "Classes_department_idx")
+  @@index([is_active], map: "Classes_is_active_idx")
+}
+
+model classsubjects {
+  id                        Int                         @id @default(autoincrement())
+  class_id                  Int
+  subject_id                Int
+  term_id                   Int
+  assigned_by               String                      @db.VarChar(100)
+  assigned_at               DateTime                    @default(now())
+  activated_at              DateTime?
+  is_active                 Boolean                     @default(false)
+  classes                   classes                     @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "ClassSubjects_class_id_fkey")
+  subjects                  subjects                    @relation(fields: [subject_id], references: [id], onDelete: Cascade, map: "ClassSubjects_subject_id_fkey")
+  terms                     terms?                      @relation(fields: [term_id], references: [id], map: "ClassSubjects_term_id_fkey")
+  trainersubjectassignments trainersubjectassignments[]
+
+@@unique([class_id, subject_id, term_id], map: "ClassSubjects_class_id_subject_id_term_id_key")  
+@@index([class_id], map: "ClassSubjects_class_id_idx")
+  @@index([subject_id], map: "ClassSubjects_subject_id_idx")
+  @@index([term_id, is_active], map: "ClassSubjects_term_id_is_active_idx")
+}
+
+model departments {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique(map: "Departments_name_key") @db.VarChar(100)
+  code        String   @unique(map: "Departments_code_key") @db.VarChar(20)
+  description String?  @db.Text
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now())
+  created_by  String   @db.VarChar(100)
+
+  @@index([code], map: "Departments_code_idx")
+  @@index([is_active], map: "Departments_is_active_idx")
+}
+
+model employees {
+  id             Int             @id @default(autoincrement())
+  employee_id    Int             @unique(map: "Employees_employee_id_key")
+  name           String          @db.VarChar(100)
+  id_number      String          @db.VarChar(50)
+  role           String          @db.VarChar(20)
+  email          String          @unique(map: "Employees_email_key") @db.VarChar(100)
+  password       String          @db.VarChar(255)
+  date_of_birth  DateTime        @db.Date
+  id_card_path   String          @db.VarChar(255)
+  passport_photo String          @db.VarChar(255)
+  created_at     DateTime        @default(now())
+  users          users           @relation(fields: [employee_id], references: [id], onDelete: Cascade, map: "Employees_employee_id_fkey")
+  loginlogs      loginlogs[]
+  passwordreset  passwordreset[]
+
+  @@index([id_number, role], map: "Employees_id_number_role_idx")
+}
+
+model lessonperiods {
+  id             Int              @id @default(autoincrement())
+  name           String           @db.VarChar(50)
+  start_time     DateTime         @db.Time(0)
+  end_time       DateTime         @db.Time(0)
+  duration       Int
+  is_active      Boolean          @default(true)
+  created_at     DateTime         @default(now())
+  timetableslots timetableslots[]
+}
+
+model loginlogs {
+  id               Int        @id @default(autoincrement())
+  user_id          Int?
+  employee_id      Int?
+  email            String     @db.VarChar(100)
+  ip_address       String     @db.VarChar(45)
+  user_agent       String     @db.Text
+  status           String     @db.VarChar(20)
+  failure_reason   String?    @db.VarChar(100)
+  login_method     String     @db.VarChar(20)
+  session_duration Int?
+  attempted_at     DateTime   @default(now())
+  employees        employees? @relation(fields: [employee_id], references: [id], map: "LoginLogs_employee_id_fkey")
+  users            users?     @relation(fields: [user_id], references: [id], map: "LoginLogs_user_id_fkey")
+
+  @@index([attempted_at], map: "LoginLogs_attempted_at_idx")
+  @@index([email], map: "LoginLogs_email_idx")
+  @@index([employee_id], map: "LoginLogs_employee_id_idx")
+  @@index([ip_address], map: "LoginLogs_ip_address_idx")
+  @@index([status], map: "LoginLogs_status_idx")
+  @@index([user_id], map: "LoginLogs_user_id_idx")
+}
+
+model passwordreset {
+  id          Int       @id @default(autoincrement())
+  employee_id Int
+  token       String    @unique(map: "PasswordReset_token_key")
+  expires     DateTime
+  used        Boolean   @default(false)
+  created_at  DateTime  @default(now())
+  employees   employees @relation(fields: [employee_id], references: [id], map: "PasswordReset_employee_id_fkey")
+
+  @@index([employee_id], map: "PasswordReset_employee_id_fkey")
+  @@index([token], map: "PasswordReset_token_idx")
+}
+
+model rooms {
+  id             Int              @id @default(autoincrement())
+  name           String           @db.VarChar(100)
+  capacity       Int?
+  room_type      String?          @db.VarChar(50)
+  equipment      Json?
+  department     String?          @db.VarChar(50)
+  is_active      Boolean          @default(true)
+  created_at     DateTime         @default(now())
+  updated_at     DateTime
+  timetableslots timetableslots[]
+}
+
+model subjects {
+  id                        Int                         @id @default(autoincrement())
+  name                      String                      @db.VarChar(100)
+  code                      String                      @unique(map: "Subjects_code_key") @db.VarChar(20)
+  department                String                      @db.VarChar(50)
+  credit_hours              Int?
+  description               String?                     @db.Text
+  is_active                 Boolean                     @default(true)
+  created_at                DateTime                    @default(now())
+  updated_at                DateTime                    @default(now())
+  created_by                String                      @db.VarChar(100)
+  classsubjects             classsubjects[]
+  timetableslots            timetableslots[]
+  trainersubjectassignments trainersubjectassignments[]
+  subjectassignmentlog      subjectassignmentlog[]      // ADD THIS
+  can_be_online             Boolean                     @default(true)
+
+  @@index([code], map: "Subjects_code_idx")
+  @@index([department], map: "Subjects_department_idx")
+  @@index([is_active], map: "Subjects_is_active_idx")
+}
+
+model termclasses {
+  id          Int      @id @default(autoincrement())
+  term_id     Int
+  class_id    Int
+  assigned_at DateTime @default(now())
+  assigned_by String   @db.VarChar(100)
+  classes     classes  @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "TermClasses_class_id_fkey")
+  terms       terms    @relation(fields: [term_id], references: [id], onDelete: Cascade, map: "TermClasses_term_id_fkey")
+
+  @@unique([term_id, class_id], map: "TermClasses_term_id_class_id_key")
+  @@index([class_id], map: "TermClasses_class_id_idx")
+  @@index([term_id], map: "TermClasses_term_id_idx")
+}
+
+model terms {
+  id                        Int                         @id @default(autoincrement())
+  name                      String                      @db.VarChar(100)
+  start_date                DateTime                    @db.Date
+  end_date                  DateTime                    @db.Date
+  is_active                 Boolean                     @default(true)
+  working_days              Json?
+  holidays                  Json?
+  created_at                DateTime                    @default(now())
+  updated_at                DateTime
+  classsubjects             classsubjects[]
+  termclasses               termclasses[]
+  timetableslots            timetableslots[]
+  trainersubjectassignments trainersubjectassignments[]
+  trainerclassassignments     trainerclassassignments[]
+}
+
+model timetableslots {
+  id               String        @id
+  term_id          Int
+  class_id         Int
+  subject_id       Int
+  employee_id      Int
+  room_id          Int
+  lesson_period_id Int
+  day_of_week      Int
+  status           String        @default("scheduled") @db.VarChar(20)
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @default(now())
+  is_online_session Boolean          @default(false) 
+  classes          classes       @relation(fields: [class_id], references: [id], map: "TimetableSlots_class_id_fkey")
+  users            users         @relation(fields: [employee_id], references: [id], map: "TimetableSlots_employee_id_fkey")
+  lessonperiods    lessonperiods @relation(fields: [lesson_period_id], references: [id], map: "TimetableSlots_lesson_period_id_fkey")
+  rooms            rooms         @relation(fields: [room_id], references: [id], map: "TimetableSlots_room_id_fkey")
+  subjects         subjects      @relation(fields: [subject_id], references: [id], map: "TimetableSlots_subject_id_fkey")
+  terms            terms         @relation(fields: [term_id], references: [id], map: "TimetableSlots_term_id_fkey")
+  classattendance  classattendance[] // ✅ NEW: Relation to class attendance records
+
+  @@unique([term_id, day_of_week, lesson_period_id, employee_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_employee_key")
+  @@unique([term_id, day_of_week, lesson_period_id, room_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_room_id_key")
+  @@index([class_id], map: "TimetableSlots_class_id_idx")
+  @@index([employee_id], map: "TimetableSlots_employee_id_idx")
+  @@index([lesson_period_id], map: "TimetableSlots_lesson_period_id_fkey")
+  @@index([room_id], map: "TimetableSlots_room_id_fkey")
+  @@index([subject_id], map: "TimetableSlots_subject_id_idx")
+  @@index([term_id], map: "TimetableSlots_term_id_idx")
+  @@index([day_of_week], map: "TimetableSlots_day_of_week_idx") // Index for day queries
+  @@index([is_online_session], map: "TimetableSlots_is_online_session_idx") // Index for online session queries
+
+}
+
+model trainerclassassignments {
+  id          Int      @id @default(autoincrement())
+  trainer_id  Int
+  class_id    Int
+  term_id      Int     @default(1) 
+  assigned_at DateTime @default(now())
+  is_active   Boolean  @default(true)
+  assigned_by String   @db.VarChar(100)
+  classes     classes  @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "TrainerClassAssignments_class_id_fkey")
+  users       users    @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "TrainerClassAssignments_trainer_id_fkey")
+  terms        terms    @relation(fields: [term_id], references: [id])
+
+  @@unique([trainer_id, class_id], map: "TrainerClassAssignments_trainer_id_class_id_key")
+  @@index([class_id], map: "TrainerClassAssignments_class_id_idx")
+  @@index([is_active], map: "TrainerClassAssignments_is_active_idx")
+  @@index([trainer_id], map: "TrainerClassAssignments_trainer_id_idx")
+   @@index([term_id], map: "TrainerClassAssignments_term_id_idx")
+}
+
+model trainersubjectassignments {
+  id               Int           @id @default(autoincrement())
+  trainer_id       Int
+  subject_id       Int
+  term_id          Int
+  class_subject_id Int
+  assigned_at      DateTime      @default(now())
+  is_active        Boolean       @default(true)
+  classsubjects    classsubjects @relation(fields: [class_subject_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_class_subject_id_fkey")
+  subjects         subjects      @relation(fields: [subject_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_subject_id_fkey")
+  terms            terms         @relation(fields: [term_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_term_id_fkey")
+  users            users         @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_trainer_id_fkey")
+
+  @@unique([trainer_id, subject_id, term_id], map: "TrainerSubjectAssignments_trainer_subject_term_key")
+  @@index([class_subject_id], map: "TrainerSubjectAssignments_class_subject_id_idx")
+  @@index([subject_id], map: "TrainerSubjectAssignments_subject_id_fkey")
+  @@index([term_id], map: "TrainerSubjectAssignments_term_id_idx")
+  @@index([trainer_id], map: "TrainerSubjectAssignments_trainer_id_idx")
+}
+
+model users {
+  id                          Int                          @id @default(autoincrement())
+  name                        String                       @db.VarChar(100)
+  id_number                   String                       @unique(map: "Users_id_number_key") @db.VarChar(50)
+  role                        String                       @db.VarChar(20)
+  has_timetable_admin         Boolean   @default(false)
+  is_blocked                  Boolean   @default(false)
+  blocked_at                  DateTime?
+  blocked_by                  Int?
+  blocked_reason              String?
+  phone_number                String                       @db.VarChar(20)
+  department                  String?                      @db.VarChar(20)
+  gender                      String                       @db.VarChar(10)
+  email                       String?                      @unique(map: "Users_email_key") @db.VarChar(100)
+  is_active                   Boolean                      @default(true)
+  created_at                  DateTime                     @default(now())
+  updated_at                  DateTime                     @default(now())
+  created_by                  String                       @db.VarChar(100)
+  attendance                  attendance[]
+  biometricenrollments        biometricenrollments[]
+  biometriclogs               biometriclogs[]
+  classattendance             classattendance[]
+  employees                   employees?
+  loginlogs                   loginlogs[]
+  timetableslots              timetableslots[]
+  trainerclassassignments     trainerclassassignments[]
+  trainersubjectassignments   trainersubjectassignments[]
+  webauthncredentialchallenge webauthncredentialchallenge?
+  webauthncredentials         webauthncredentials[]
+  
+  // Block relations - changed User to users
+  blocked_by_user         users?     @relation("BlockedUsers", fields: [blocked_by], references: [id], onDelete: SetNull)
+  users_blocked           users[]    @relation("BlockedUsers")
+  
+  // Assignment log relations
+  admin_assignments       subjectassignmentlog[] @relation("AdminAssignments")
+  trainer_selections      subjectassignmentlog[] @relation("TrainerSelections")
+  
+  // Block log relations
+  block_logs_as_user      userblocklog[] @relation("BlockedUser")
+  block_logs_as_blocker   userblocklog[] @relation("BlockerUser")
+
+  @@index([id_number], map: "Users_id_number_idx")
+}
+
+model webauthncredentialchallenge {
+  userId    Int      @id
+  challenge String   @db.Text
+  expires   DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+  users     users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentialChallenge_userId_fkey")
+}
+
+model webauthncredentials {
+  id           String   @id
+  userId       Int
+  email        String?  @db.VarChar(100)
+  credentialId String   @unique(map: "WebAuthnCredentials_credentialId_key")
+  publicKey    String   @db.Text
+  counter      Int
+  transports   String?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now())
+  users        users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentials_userId_fkey")
+
+  @@index([userId], map: "WebAuthnCredentials_userId_fkey")
+}
+
+ model userblocklog {
+  id              Int       @id @default(autoincrement())
+  user_id         Int
+  blocked_by      Int
+  action          String    // 'blocked' or 'unblocked'
+  reason          String?
+  created_at      DateTime  @default(now())
+  
+  // Changed User to users
+  user            users     @relation("BlockedUser", fields: [user_id], references: [id], onDelete: Cascade)
+  blocked_by_user users     @relation("BlockerUser", fields: [blocked_by], references: [id], onDelete: Cascade)
+}
+
+model timetablesettings {
+  id                              Int       @id @default(autoincrement())
+  subject_selection_deadline      DateTime?
+  deadline_enabled                Boolean   @default(false)
+  allow_admin_assignment          Boolean   @default(false)
+  block_all_subject_selection     Boolean   @default(false)
+  timetable_generation_deadline   DateTime?
+  generation_deadline_enabled     Boolean   @default(false)
+  attendance_check_in_window      Int       @default(15) // Minutes before class trainers can check in
+  attendance_late_threshold       Int       @default(10) // Minutes after start time to mark as late
+  attendance_location_required    Boolean   @default(true) // Require location verification using existing geofence
+  created_at                      DateTime  @default(now())
+  updated_at                      DateTime  @updatedAt
+}
+
+model subjectassignmentlog {
+  id              Int       @id @default(autoincrement())
+  trainer_id      Int
+  subject_id      Int
+  class_id        Int
+  assigned_by     Int
+  assignment_type String    // 'self' or 'admin'
+  created_at      DateTime  @default(now())
+  
+  // Changed User, Subject, Class to users, subjects, classes
+  trainer         users     @relation("TrainerSelections", fields: [trainer_id], references: [id], onDelete: Cascade)
+  assigned_by_user users    @relation("AdminAssignments", fields: [assigned_by], references: [id], onDelete: Cascade)
+  subject         subjects  @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+  class           classes   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  
+  @@index([trainer_id], map: "SubjectAssignmentLog_trainer_id_idx")
+  @@index([subject_id], map: "SubjectAssignmentLog_subject_id_idx")
+  @@index([class_id], map: "SubjectAssignmentLog_class_id_idx")
+  @@index([assigned_by], map: "SubjectAssignmentLog_assigned_by_idx")
+}
