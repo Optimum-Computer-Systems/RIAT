@@ -56,6 +56,10 @@ const GEOFENCE = {
   latitude: -0.055163,
   longitude: 34.756414,
   radius: 300,
+
+  // latitude: -1.22486,
+  // longitude: 36.70958,
+  //   radius: 500_000,
 };
 
 // Mobile request validation schema
@@ -672,9 +676,9 @@ export async function POST(request: NextRequest) {
 
     // Get employee record
     const employee = await db.employees.findUnique({
-      where: { employee_id: userId },
+      where: { id: userId },
        include: {
-    users: true  // Include user data
+          users: true  // Include user data
   }
     });
 
@@ -685,6 +689,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const usersId = employee.employee_id; 
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     const currentTime = nowInKenya.toJSDate();
     const currentDate = currentTime.toISOString().split('T')[0];
@@ -695,9 +700,11 @@ export async function POST(request: NextRequest) {
                             body?.action;
 
     const handler = normalizedAction === 'check-in' ? 
-      (userId: number, time: Date, date: string) => handleCheckIn(userId, time, date, isMobileRequest, body?.location, clientIP, userAgent) :
+      (usersId: number, time: Date, date: string) => 
+          handleCheckIn(usersId, time, date, isMobileRequest, body?.location, clientIP, userAgent) :
       normalizedAction === 'check-out' ? 
-      (userId: number, time: Date, date: string) => handleCheckOut(userId, time, date, isMobileRequest, body?.location, clientIP, userAgent) : 
+      (usersId: number, time: Date, date: string) => 
+          handleCheckOut(usersId, time, date, isMobileRequest, body?.location, clientIP, userAgent) : 
       null;
 
     if (!handler) {
@@ -707,7 +714,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await handler(userId, currentTime, currentDate);
+    const result = await handler(usersId, currentTime, currentDate);
     
     // Log the attendance action
     if (result.success) {
@@ -715,7 +722,7 @@ export async function POST(request: NextRequest) {
       
       await db.loginlogs.create({
         data: {
-          user_id: employee.employee_id,
+          user_id: usersId,
           employee_id: employee.id,
           email: employee.email,
           ip_address: clientIP,
@@ -733,6 +740,7 @@ export async function POST(request: NextRequest) {
       authMethod,
       user: {
         id: employee.id,
+        users_id: usersId, 
         name: employee.name,
         email: employee.email
       }
@@ -748,7 +756,8 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    return NextResponse.json(response, { status: result.success ? 200 : 400 });
+    return NextResponse.json(
+      response, { status: result.success ? 200 : 400 });
 
   } catch (error) {
     console.error('Attendance error:', error);
