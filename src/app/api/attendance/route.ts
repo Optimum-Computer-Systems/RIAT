@@ -517,6 +517,7 @@ export async function GET(request: NextRequest) {
             name: mobileAuth.payload.name || ''
           };
           authMethod = 'mobile_jwt';
+          console.log('✅ Mobile JWT verified, user:', user);
         }
       } catch (error) {
         console.error('Mobile JWT verification failed:', error);
@@ -540,11 +541,9 @@ export async function GET(request: NextRequest) {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       
-      // ✅ FIX: Fetch ALL attendance records for admin, not filtered by employee_id
       const attendanceData = await db.attendance.findMany({
         where: { 
           date: { gte: sevenDaysAgo } 
-          // ❌ DON'T filter by employee_id here for admin
         },
         include: {
           users: {
@@ -565,10 +564,18 @@ export async function GET(request: NextRequest) {
 
       console.log(`Admin fetched ${attendanceData.length} attendance records`);
 
+      // ✅ Serialize admin data properly
+      const serializedAdminData = attendanceData.map(record => ({
+        ...record,
+        date: record.date.toISOString(),
+        check_in_time: record.check_in_time?.toISOString() || null,
+        check_out_time: record.check_out_time?.toISOString() || null,
+      }));
+
       return NextResponse.json({
         success: true,
         role: 'admin',
-        attendanceData,
+        attendanceData: serializedAdminData,
         autoProcessed: autoProcessResult
       });
     }
@@ -577,34 +584,83 @@ export async function GET(request: NextRequest) {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
-    // ✅ For employees, filter by their employee_id (which is users.id)
+    console.log('📊 Fetching attendance for employee_id:', user.employee_id);
+    
     const monthlyData = await db.attendance.findMany({
       where: {
-        employee_id: user.employee_id, // This should match users.id
+        employee_id: user.employee_id,
         date: { gte: thirtyDaysAgo },
       },
       orderBy: { date: 'desc' },
     });
 
-    const todayAttendance = monthlyData.find(
-      record => record.date.toISOString().split('T')[0] === currentDate
+    // ✅ FIX: Process and serialize employee data with correct status calculation
+    const processedData = monthlyData.map(record => {
+      let calculatedStatus = record.status;
+      
+      // Recalculate status if it's "Absent" but there's a check_in_time
+      if (record.status === 'Absent' && record.check_in_time) {
+        const checkInTime = new Date(record.check_in_time);
+        const recordDate = new Date(record.date);
+        
+        // Create work start time (9 AM Kenya time) for this specific date
+        const workStart = new Date(recordDate);
+        workStart.setHours(TIME_CONSTRAINTS.WORK_START, 0, 0, 0);
+        
+        calculatedStatus = checkInTime > workStart ? 'Late' : 'Present';
+        
+        console.log('🔄 Recalculated status:', {
+          date: record.date.toISOString().split('T')[0],
+          checkIn: checkInTime.toISOString(),
+          workStart: workStart.toISOString(),
+          oldStatus: record.status,
+          newStatus: calculatedStatus
+        });
+      }
+      
+      // Return serialized record with calculated status
+      return {
+        id: record.id,
+        employee_id: record.employee_id,
+        date: record.date.toISOString(),
+        check_in_time: record.check_in_time?.toISOString() || null,
+        check_out_time: record.check_out_time?.toISOString() || null,
+        sessions: record.sessions,
+        status: calculatedStatus, // Use calculated status
+      };
+    });
+
+    const todayAttendance = processedData.find(
+      record => new Date(record.date).toISOString().split('T')[0] === currentDate
     );
 
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     const currentTime = nowInKenya.toJSDate();
 
-    const isCheckedIn = hasActiveSession(todayAttendance) &&
+    // Use the original record for session checking (since it has the right structure)
+    const todayOriginalRecord = monthlyData.find(
+      record => record.date.toISOString().split('T')[0] === currentDate
+    );
+
+    const isCheckedIn = hasActiveSession(todayOriginalRecord) &&
       currentTime.getHours() < TIME_CONSTRAINTS.WORK_END;
+
+    console.log('📤 Sending response:', {
+      recordCount: processedData.length,
+      isCheckedIn,
+      todayStatus: todayAttendance?.status,
+      authMethod
+    });
 
     return NextResponse.json({
       success: true,
       role: 'employee',
       isCheckedIn,
-      attendanceData: monthlyData,
+      attendanceData: processedData, // ✅ Send processed data with correct status
       authMethod,
     });
   } catch (error) {
-    console.error('Status check error:', error);
+    console.error('❌ Status check error:', error);
     return NextResponse.json({
       success: true,
       role: 'unauthenticated',
